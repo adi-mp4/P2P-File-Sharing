@@ -1,0 +1,68 @@
+import socket
+import argparse
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+def start_receiver(sender_ip, port=5000):
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    
+    print(f"[*] Connecting to sender at {sender_ip}:{port}...")
+    try:
+        client_socket.connect((sender_ip, port))
+        print("[+] Connected successfully!")
+    except Exception as e:
+        print(f"[-] Connection failed: {e}")
+        return
+
+    key_hex = input("[?] Enter the Secret Key (hex) provided by sender: ").strip()
+    try:
+        encryption_key = bytes.fromhex(key_hex)
+        aesgcm = AESGCM(encryption_key)
+    except Exception as e:
+        print(f"[-] Invalid key format: {e}")
+        client_socket.close()
+        return
+
+    try:
+        name_len_bytes = client_socket.recv(4)
+        name_len = int.from_bytes(name_len_bytes, 'big')
+        
+        file_name = client_socket.recv(name_len).decode('utf-8')
+        
+        size_bytes = client_socket.recv(8)
+        file_size = int.from_bytes(size_bytes, 'big')
+
+        print(f"[+] Receiving file: '{file_name}' ({file_size} bytes)")
+
+        received = 0
+        with open(file_name, 'wb') as f:
+            while received < file_size:
+                nonce_len_bytes = client_socket.recv(2)
+                if not nonce_len_bytes:
+                    break
+                nonce_len = int.from_bytes(nonce_len_bytes, 'big')
+                nonce = client_socket.recv(nonce_len)
+
+                ct_len_bytes = client_socket.recv(4)
+                ct_len = int.from_bytes(ct_len_bytes, 'big')
+                ciphertext = client_socket.recv(ct_len)
+
+                plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+                f.write(plaintext)
+                
+                received += len(plaintext)
+                print(f"\r[<-] Progress: {int((received / file_size) * 100)}%", end="")
+
+        print(f"\n[+] File successfully received and saved as '{file_name}'!")
+
+    except Exception as e:
+        print(f"\n[-] Error during file reception: {e}")
+    finally:
+        client_socket.close()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Secure P2P File Receiver")
+    parser.add_argument("ip", help="IP address of the sender")
+    parser.add_argument("-p", "--port", type=int, default=5000, help="Port to connect to")
+    args = parser.parse_args()
+    
+    start_receiver(args.ip, args.port)
