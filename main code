@@ -1,0 +1,71 @@
+import socket
+import os
+import argparse
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+def start_sender(file_path, port=5000):
+    if not os.path.exists(file_path):
+        print(f"[-] Error: File '{file_path}' not found.")
+        return
+
+    encryption_key = AESGCM.generate_key(bit_length=256)
+    aesgcm = AESGCM(encryption_key)
+
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(('0.0.0.0', port))
+    server_socket.listen(1)
+
+    print(f"[+] Sender active on {local_ip}:{port}")
+    print(f"[+] Waiting for receiver connection...")
+
+    conn, addr = server_socket.accept()
+    print(f"[+] Connection established with {addr[0]}")
+
+    try:
+        file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+
+        file_name_bytes = file_name.encode('utf-8')
+        conn.sendall(len(file_name_bytes).to_bytes(4, 'big'))
+        conn.sendall(file_name_bytes)
+        conn.sendall(file_size.to_bytes(8, 'big'))
+
+        chunk_size = 64 * 1024  
+        sent = 0
+        
+        with open(file_path, 'rb') as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                nonce = os.urandom(12)
+                ciphertext = aesgcm.encrypt(nonce, chunk, None)
+                
+                conn.sendall(len(nonce).to_bytes(2, 'big'))
+                conn.sendall(nonce)
+                conn.sendall(len(ciphertext).to_bytes(4, 'big'))
+                conn.sendall(ciphertext)
+                
+                sent += len(chunk)
+                print(f"\r[->] Progress: {int((sent / file_size) * 100)}%", end="")
+
+        print("\n[+] File sent and encrypted successfully!")
+
+    except Exception as e:
+        print(f"\n[-] Error during transmission: {e}")
+    finally:
+        print(f"\n[🔑] SECRET KEY (Share this securely with receiver): {encryption_key.hex()}")
+        conn.close()
+        server_socket.close()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Secure P2P File Sender")
+    parser.add_argument("file", help="Path to the file you want to send")
+    parser.add_argument("-p", "--port", type=int, default=5000, help="Port to listen on")
+    args = parser.parse_args()
+    
+    start_sender(args.file, args.port)
